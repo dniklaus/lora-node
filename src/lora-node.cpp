@@ -3,6 +3,8 @@
  *
  *  Created on: 15.03.2017
  *      Author: niklausd
+ *
+ *
  */
 
 //#include <Arduino.h>
@@ -40,7 +42,7 @@ SerialCommand* sCmd = 0;
 // LMIC Wrapper stuff
 //-----------------------------------------------------------------------------
 // This EUI must be in little-endian format, so least-significant-byte
-// ffirst. When copying an EUI from ttnctl output, this means to reverse
+// first. When copying an EUI from ttnctl output, this means to reverse
 // the bytes. For TTN issued EUIs the last bytes should be 0xD5, 0xB3, 0x70.
 static const u1_t PROGMEM APPEUI[8] = { 0xC0, 0x69, 0x00, 0xF0, 0x7E, 0xD5, 0xB3, 0x70 };
 void os_getArtEui(u1_t* buf)
@@ -58,8 +60,7 @@ void os_getDevEui(u1_t* buf)
 // This key should be in big endian format (or, since it is not really a
 // number but a block of memory, endianness does not really apply). In
 // practice, a key taken from ttnctl can be copied as-is.
-// The key shown here is the semtech default key.
-static const u1_t PROGMEM APPKEY[16] = { 0xBD, 0x3F, 0x4C, 0xED, 0xA4, 0x99, 0x75, 0x94, 0x57, 0xDA, 0x31, 0x06, 0x4B, 0x69, 0x70, 0x5D };
+static const u1_t PROGMEM APPKEY[16] = { 0x5C, 0xDE, 0x4A, 0x25, 0x09, 0x49, 0x07, 0xEC, 0x42, 0x2E, 0x23, 0x59, 0x27, 0x66, 0x00, 0x8B };
 void os_getDevKey(u1_t* buf)
 {
   memcpy_P(buf, APPKEY, 16);
@@ -76,17 +77,25 @@ static osjob_t sendjob;
 const unsigned TX_INTERVAL = 60;
 
 // Pin mapping
-const lmic_pinmap lmic_pins =
-{
-  .nss = 6,
-  .rxtx = LMIC_UNUSED_PIN,
-  .rst = 5,
-  .dio = { 2, 3, 4 }
+#if defined (ARDUINO_ARCH_SAMD) && defined (__SAMD21G18A__) // Adafruit Feather M0
+const lmic_pinmap lmic_pins = {
+    .nss = 8,
+    .rxtx = LMIC_UNUSED_PIN,
+    .rst = 4,
+    .dio = {3, 6, 11},
 };
+#else
+const lmic_pinmap lmic_pins = {
+    .nss = 10,
+    .rxtx = LMIC_UNUSED_PIN,
+    .rst = 9,
+    .dio = {2, 6, 7},
+};
+#endif
 
 void onEvent(ev_t ev)
 {
-  Serial.print((s4_t)os_getTime());
+  Serial.print(os_getTime());
   Serial.print(": ");
   switch (ev)
   {
@@ -107,7 +116,31 @@ void onEvent(ev_t ev)
       break;
     case EV_JOINED:
       Serial.println(F("EV_JOINED"));
+      {
+        u4_t netid = 0;
+        devaddr_t devaddr = 0;
+        u1_t nwkKey[16];
+        u1_t artKey[16];
+        LMIC_getSessionKeys(&netid, &devaddr, nwkKey, artKey);
+        Serial.print("netid: ");
+        Serial.println(netid, DEC);
+        Serial.print("devaddr: ");
+        Serial.println(devaddr, HEX);
+        Serial.print("artKey: ");
+        for (unsigned int i=0; i<sizeof(artKey); ++i)
+        {
+          Serial.print(artKey[i], HEX);
+        }
+        Serial.println("");
+        Serial.print("nwkKey: ");
+        for (unsigned int i=0; i<sizeof(nwkKey); ++i)
+        {
+          Serial.print(nwkKey[i], HEX);
+        }
+        Serial.println("");
 
+        LMIC_setSeqnoUp(140);
+      }
       // Disable link check validation (automatically enabled
       // during join, but not supported by TTN at this time).
       LMIC_setLinkCheckMode(0);
@@ -128,13 +161,12 @@ void onEvent(ev_t ev)
         Serial.println(F("Received ack"));
       if (LMIC.dataLen)
       {
-        Serial.println(F("Received "));
-        Serial.println(LMIC.dataLen);
+        Serial.print(F("Received "));
+        Serial.print(LMIC.dataLen);
         Serial.println(F(" bytes of payload"));
       }
       // Schedule next transmission
-      os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(TX_INTERVAL),
-          do_send);
+      os_setTimedCallback(&sendjob, os_getTime()+sec2osticks(TX_INTERVAL), do_send);
       break;
     case EV_LOST_TSYNC:
       Serial.println(F("EV_LOST_TSYNC"));
@@ -153,7 +185,9 @@ void onEvent(ev_t ev)
       Serial.println(F("EV_LINK_ALIVE"));
       break;
     default:
-      Serial.println(F("Unknown event"));
+      Serial.print(F("Unknown event ("));
+      Serial.print(ev);
+      Serial.println(F(")"));
       break;
   }
 }
@@ -174,98 +208,16 @@ void do_send(osjob_t* j)
   // Next TX is scheduled after TX_COMPLETE event.
 }
 
-#if 0
-// LoRaWan credentials (http://www.thethingsnetwork.org), Device EUI 1234567812345678
-uint8_t NWKSKEY[] =
-{ 0x62, 0x5B, 0xBE, 0x1A, 0x57, 0x09, 0x12, 0x25, 0xFA, 0x74, 0x5C, 0xB7, 0x1E, 0x62, 0x28, 0x5A};
-uint8_t APPSKEY[] =
-{ 0xAA, 0x22, 0x9D, 0x3D, 0x63, 0x98, 0xBE, 0xEE, 0xB4, 0xE2, 0x7F, 0xD6, 0x75, 0x1F, 0x5C, 0x83};
-const long int DEVADDR = 0x26011BFE;
-
-// These callbacks are only used in over-the-air activation, so they are
-// left empty here (we cannot leave them out completely unless
-// DISABLE_JOIN is set in config.h, otherwise the linker will complain).
-void os_getArtEui(u1_t* buf)
-{}
-void os_getDevEui(u1_t* buf)
-{}
-void os_getDevKey(u1_t* buf)
-{}
-
-// forward declaration
-void do_send(osjob_t* j);
-
-static osjob_t sendjob;
-
-// Schedule TX every this many seconds (might become longer due to duty
-// cycle limitations).
-const unsigned TX_INTERVAL = 20;
-
-// Pin mapping Dragino Shield
-const lmic_pinmap lmic_pins =
-{
-  .nss = 10,
-  .rxtx = LMIC_UNUSED_PIN,
-  .rst = 9, .dio =
-  { 2, 6, 7}
-};
-
-void onEvent(ev_t ev)
-{
-  if (ev == EV_TXCOMPLETE)
-  {
-    Serial.println(F("EV_TXCOMPLETE (includes waiting for RX windows)"));
-    // Schedule next transmission
-    os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(TX_INTERVAL), do_send);
-  }
-}
-
-void do_send(osjob_t* j)
-{
-  // Payload to send (uplink)
-  static uint8_t message[] = "hi";
-
-  // Check if there is not a current TX/RX job running
-  if (LMIC.opmode & OP_TXRXPEND)
-  {
-    Serial.println(F("OP_TXRXPEND, not sending"));
-  }
-  else
-  {
-    // Prepare upstream data transmission at the next possible time.
-    LMIC_setTxData2(1, message, sizeof(message) - 1, 0);
-    Serial.println(F("Sending uplink packet..."));
-  }
-  // Next TX is scheduled after TX_COMPLETE event.
-}
-#endif
-
 //-----------------------------------------------------------------------------
 
 void setup()
 {
+  delay(1000);
+
   pinMode(BUILTIN_LED, OUTPUT);
   digitalWrite(BUILTIN_LED, 0);
 
   setupProdDebugEnv();
-
-//  // LMIC init
-//  os_init();
-//
-//  // Reset the MAC state. Session and pending data transfers will be discarded.
-//  LMIC_reset();
-//
-//  // Set static session parameters.
-//  LMIC_setSession(0x1, DEVADDR, NWKSKEY, APPSKEY);
-//
-//  // Disable link check validation
-//  LMIC_setLinkCheckMode(0);
-//
-//  // TTN uses SF9 for its RX2 window.
-//  LMIC.dn2Dr = DR_SF9;
-//
-//  // Set data rate and transmit power for uplink
-//  LMIC_setDrTxpow(DR_SF7, 14);
 
   // LMIC init
   os_init();
